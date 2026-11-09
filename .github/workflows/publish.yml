@@ -1,0 +1,41 @@
+name: Publish verified APK
+on:
+  push:
+    branches: [main]
+    paths: ['distribution/**', '.github/workflows/publish.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: publish-aura
+  cancel-in-progress: false
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Verify and publish prepared APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, subprocess
+          folder = pathlib.Path('distribution')
+          meta = json.loads((folder / 'release.json').read_text())
+          apk = folder / 'Aura-Home.apk'
+          assert hashlib.sha256(apk.read_bytes()).hexdigest() == meta['sha256'], 'APK checksum mismatch'
+          assert isinstance(meta['versionCode'], int) and meta['versionCode'] > 0
+          tag = 'build-' + str(meta['versionCode'])
+          result = subprocess.run(['gh', 'release', 'view', tag, '--json', 'isDraft'], capture_output=True, text=True)
+          if result.returncode == 0:
+              assert not json.loads(result.stdout)['isDraft'], 'Existing draft requires review'
+              print('Release already published; leaving it unchanged.')
+          else:
+              subprocess.run(['gh','release','create',tag,str(apk),str(folder/'release.json'),
+                  '--title','Aura Home '+meta['versionName'],'--notes-file',str(folder/'release-notes.md'),
+                  '--target',os.environ['GITHUB_SHA'],'--latest'], check=True)
+          PY
